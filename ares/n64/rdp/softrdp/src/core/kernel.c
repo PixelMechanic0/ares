@@ -1011,10 +1011,11 @@ static SR_ALWAYS_INLINE sr_result render_span(sr_memory *memory,
     span_carry state = {
         { 0, 0, 0, 0, 0, 0, 0, 0 },
         { { 0u, 0u, 0u, 0u }, { 0u, 0u, 0u, 0u }, 0u },
-        work->x_begin - 1,
-        /* No divide is cached yet. The key must match no lookup: x_begin - 1
-         * is the first pixel's x neighbour in a non-flipped two-cycle span and
-         * x_begin - 3 the end-of-span peek, and either would read s = t = 0. */
+        /* Nothing is carried or cached yet, so neither key may match a lookup:
+         * x_begin - 1 is the first pixel's x neighbour in a non-flipped
+         * two-cycle span and x_begin - 3 the end-of-span peek. A matching key
+         * would hand them a zero texel (black TEXEL1) or s = t = 0 (wrong LOD). */
+        INT_MIN,
         { INT_MIN, 0, 0, false },
         /* No pixel's cycle 0 is known yet; x_begin - 3 is nobody's neighbour. */
         work->x_begin - 3, 0u, 0u
