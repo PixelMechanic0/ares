@@ -182,10 +182,11 @@ static bool read_command_word(const sr_context *ctx, bool xbus_dma, uint32_t wor
             return false;
         }
 
-        *word = ((uint32_t)dmem[byte_addr ^ 3u] << 24) |
-                ((uint32_t)dmem[(byte_addr + 1u) ^ 3u] << 16) |
-                ((uint32_t)dmem[(byte_addr + 2u) ^ 3u] << 8) |
-                ((uint32_t)dmem[(byte_addr + 3u) ^ 3u]);
+        const uint32_t swizzle = ctx->host.dmem_big_endian ? 0u : 3u;
+        *word = ((uint32_t)dmem[byte_addr ^ swizzle] << 24) |
+                ((uint32_t)dmem[(byte_addr + 1u) ^ swizzle] << 16) |
+                ((uint32_t)dmem[(byte_addr + 2u) ^ swizzle] << 8) |
+                ((uint32_t)dmem[(byte_addr + 3u) ^ swizzle]);
         return true;
     }
 

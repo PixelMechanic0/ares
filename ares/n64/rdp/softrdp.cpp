@@ -76,6 +76,7 @@ auto RDP::rendererLoad() -> bool {
   impl.host.hidden_rdram = rdram.hidden.data;
   impl.host.hidden_rdram_size = rdram.hidden.size;
   impl.host.dmem = rsp.dmem.data;
+  impl.host.dmem_big_endian = true;
   impl.host.mi_intr_reg = &impl.miIntr;
   impl.host.raise_mi_interrupt = &raiseDPInterrupt;
   impl.host.trace_rdp_command = &traceRDPCommand;
