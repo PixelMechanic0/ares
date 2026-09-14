@@ -124,11 +124,6 @@ function(_bundle_dependencies target)
         continue()
       endif()
 
-      if(XCODE AND ${target} STREQUAL mia-ui AND ${library} STREQUAL "MoltenVK::MoltenVK")
-        message(DEBUG "Working around https://gitlab.kitware.com/cmake/cmake/-/issues/23675")
-        continue()
-      endif()
-
       list(APPEND bundled_targets ${library})
 
       list(APPEND library_paths ${library_location})
@@ -140,7 +135,7 @@ function(_bundle_dependencies target)
   list(REMOVE_DUPLICATES library_paths)
 
   if(UNUSED)
-    # One of these would be nice, but we cannot install IMPORTed targets (librashader, SDL, MoltenVK). We
+    # One of these would be nice, but we cannot install IMPORTed targets (librashader, SDL). We
     # could use install(FILES ...), but that wouldn't fixup rpaths, which defeats the purpose of using
     # install() in the first place.
     install(

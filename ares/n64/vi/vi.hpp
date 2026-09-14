@@ -28,6 +28,25 @@ struct VI : Thread, Memory::RCP<VI> {
   auto readWord(u32 address, Thread& thread) -> u32;
   auto writeWord(u32 address, u32 data, Thread& thread) -> void;
 
+  struct Registers {
+    u32 status;
+    u32 origin;
+    u32 width;
+    u32 intr;
+    u32 current;
+    u32 timing;
+    u32 vSync;
+    u32 hSync;
+    u32 leap;
+    u32 hStart;
+    u32 vStart;
+    u32 vBurst;
+    u32 xScale;
+    u32 yScale;
+  };
+
+  auto registers() const -> Registers;
+
   //serialization.cpp
   auto serialize(serializer&) -> void;
 
@@ -38,6 +57,7 @@ struct VI : Thread, Memory::RCP<VI> {
     n1  divot;
     n1  serrate;  //interlace
     n2  antialias;
+    n1  ditherFilter;
     n32 reserved;
     n24 dramAddress;
     n12 width;
@@ -73,9 +93,7 @@ struct VI : Thread, Memory::RCP<VI> {
 //unserialized:
   bool refreshed;
 
-  #if defined(VULKAN)
-  bool gpuOutputValid = false;
-  #endif
+  bool rdpOutputValid = false;
 };
 
 extern VI vi;

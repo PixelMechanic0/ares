@@ -80,14 +80,10 @@ auto Nintendo64DD::load() -> LoadResult {
   }
 
   ares::Nintendo64::option("Quality", settings.nintendo64.quality);
-  ares::Nintendo64::option("Supersampling", settings.nintendo64.supersampling);
-#if defined(VULKAN)
-  ares::Nintendo64::option("Enable GPU acceleration", true);
-#else
-  ares::Nintendo64::option("Enable GPU acceleration", false);
-#endif
-  ares::Nintendo64::option("Disable Video Interface Processing", settings.nintendo64.disableVideoInterfaceProcessing);
-  ares::Nintendo64::option("Weave Deinterlacing", settings.nintendo64.weaveDeinterlacing);
+  ares::Nintendo64::option("Disable VI Dither Filter", settings.nintendo64.disableVIDitherFilter);
+  ares::Nintendo64::option("Disable VI Divot Filter", settings.nintendo64.disableVIDivotFilter);
+  ares::Nintendo64::option("Disable VI Gamma Dither", settings.nintendo64.disableVIGammaDither);
+  ares::Nintendo64::option("Disable VI Anti-Aliasing", settings.nintendo64.disableVIAntiAliasing);
   ares::Nintendo64::option("Homebrew Mode", settings.developer.homebrewMode);
   ares::Nintendo64::option("Deterministic Entropy", settings.developer.deterministicEntropy);
   ares::Nintendo64::option("Recompiler", !settings.developer.forceInterpreter);

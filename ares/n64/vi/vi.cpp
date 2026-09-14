@@ -19,12 +19,8 @@ auto VI::load(Node::Object parent) -> void {
   u32 width = 640;
   u32 height = 576;
 
-  #if defined(VULKAN)
-  if (vulkan.enable) {
-    width *= vulkan.outputUpscale;
-    height *= vulkan.outputUpscale;
-  }
-  #endif
+  width *= rdp.rendererScale;
+  height *= rdp.rendererScale;
   screen = node->append<Node::Video::Screen>("Screen", width, height);
   screen->setRefresh(std::bind_front(&VI::refresh, this));
   screen->refreshRateHint(Region::PAL() ? 50 : 60); // TODO: More accurate refresh rate hint
@@ -46,18 +42,8 @@ auto VI::load(Node::Object parent) -> void {
   
   int videoHeight = Region::PAL() ? 576 : 480;
 
-  #if defined(VULKAN)
-  if(vulkan.enable) {
-    screen->setSize(vulkan.outputUpscale * 640, vulkan.outputUpscale * videoHeight);
-    if(!vulkan.supersampleScanout) {
-      screen->setScale(1.0 / vulkan.outputUpscale, 1.0 / vulkan.outputUpscale);
-    }
-  } else {
-    screen->setSize(640, videoHeight);
-  }
-  #else
-  screen->setSize(640, videoHeight);
-  #endif
+  screen->setSize(rdp.rendererScale * 640, rdp.rendererScale * videoHeight);
+  screen->setScale(1.0 / rdp.rendererScale, 1.0 / rdp.rendererScale);
 
   // Pedantic N64 NTSC aspect ratio is 120:119, but let's keep 120:120 to avoid slight scaling.
   // Pedantic N64 PAL aspect ratio is 5900000:4965653, but let's use 12:10 to achieve the
@@ -86,12 +72,7 @@ auto VI::main() -> void {
       }
 
       if(io.vcounter == io.vstart >> 1) {
-        #if defined(VULKAN)
-        if (vulkan.enable) {
-          gpuOutputValid = vulkan.scanoutAsync(io.field);
-          vulkan.frame();
-        }
-        #endif
+        rdpOutputValid = rdp.rendererScanout(registers());
         refreshed = true;
         screen->frame();
         ri.checkRefresh();
@@ -136,16 +117,19 @@ auto VI::main() -> void {
 }
 
 auto VI::refresh() -> void {
-  #if defined(VULKAN)
-  if(vulkan.enable && gpuOutputValid) {
+  if(rdpOutputValid) {
     const u8* rgba = nullptr;
     u32 width = 0, height = 0;
-    vulkan.mapScanoutRead(rgba, width, height);
+    bool interlaced = false, field = false;
+    rdp.rendererMapScanout(rgba, width, height, interlaced, field);
     if(rgba) {
-      screen->setViewport(0, 0, width, height);
+      if(interlaced) screen->setInterlace(!field);
+      else screen->setProgressive(0);
+      screen->setViewport(0, 0, width, height << interlaced);
       for(u32 y : range(height)) {
         auto source = rgba + width * y * sizeof(u32);
-        auto target = screen->pixels(1).data() + y * vulkan.outputUpscale * 640;
+        u32 outputY = interlaced ? y * 2 + !field : y;
+        auto target = screen->pixels(1).data() + outputY * rdp.rendererScale * 640;
         for(u32 x : range(width)) {
           target[x] = source[x * 4 + 0] << 16 | source[x * 4 + 1] << 8 | source[x * 4 + 2] << 0;
         }
@@ -154,14 +138,10 @@ auto VI::refresh() -> void {
       screen->setViewport(0, 0, 1, 1);
       screen->pixels(1).data()[0] = 0;
     }
-    vulkan.unmapScanoutRead();
-    vulkan.endScanout();
 
-    if(Model::Aleck64()) aleck64.vdp.render(screen); //aleck64 supports overlay graphics
+    if(Model::Aleck64()) aleck64.vdp.render(screen);
     return;
   }
-  #endif
-
   if(io.serrate == 0) screen->setProgressive(0);
   if(io.serrate == 1) screen->setInterlace(!io.field);
 
@@ -232,9 +212,7 @@ auto VI::power(bool reset) -> void {
   refreshed = false;
   clockFraction = 0;
 
-  #if defined(VULKAN)
-  gpuOutputValid = false;
-  #endif
+  rdpOutputValid = false;
 }
 
 }

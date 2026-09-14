@@ -129,9 +129,10 @@ auto Settings::process(bool load) -> void {
   bind(boolean, "Nintendo64/ExpansionPak", nintendo64.expansionPak);
   bind(string,  "Nintendo64/ControllerPakBankString", nintendo64.controllerPakBankString);
   bind(string,  "Nintendo64/Quality", nintendo64.quality);
-  bind(boolean, "Nintendo64/Supersampling", nintendo64.supersampling);
-  bind(boolean, "Nintendo64/DisableVideoInterfaceProcessing", nintendo64.disableVideoInterfaceProcessing);
-  bind(boolean, "Nintendo64/WeaveDeinterlacing", nintendo64.weaveDeinterlacing);
+  bind(boolean, "Nintendo64/DisableVIDitherFilter", nintendo64.disableVIDitherFilter);
+  bind(boolean, "Nintendo64/DisableVIDivotFilter", nintendo64.disableVIDivotFilter);
+  bind(boolean, "Nintendo64/DisableVIGammaDither", nintendo64.disableVIGammaDither);
+  bind(boolean, "Nintendo64/DisableVIAntiAliasing", nintendo64.disableVIAntiAliasing);
 
   bind(boolean, "GameBoyAdvance/Player", gameBoyAdvance.player);
 

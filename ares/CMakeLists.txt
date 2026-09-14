@@ -306,22 +306,6 @@ set_source_files_properties(
   PROPERTIES HEADER_FILE_ONLY TRUE
 )
 
-set_source_files_properties(
-  n64/vulkan/parallel-rdp/vulkan/shader.cpp
-  n64/vulkan/parallel-rdp/vulkan/descriptor_set.cpp
-  n64/vulkan/parallel-rdp/vulkan/device.cpp
-  n64/vulkan/parallel-rdp/vulkan/command_buffer.cpp
-  n64/vulkan/parallel-rdp/vulkan/render_pass.cpp
-  n64/vulkan/parallel-rdp/vulkan/context.cpp
-  n64/vulkan/parallel-rdp/vulkan/memory_allocator.cpp
-  n64/vulkan/parallel-rdp/vulkan/semaphore.cpp
-  n64/vulkan/parallel-rdp/util/logging.cpp
-  n64/vulkan/parallel-rdp/util/environment.cpp
-  n64/vulkan/parallel-rdp/util/thread_name.cpp
-  n64/vulkan/parallel-rdp/util/timer.cpp
-  PROPERTIES SKIP_PRECOMPILE_HEADERS ON
-)
-
 target_sources(ares PRIVATE cmake/os-macos.cmake cmake/os-windows.cmake cmake/os-linux.cmake)
 
 set_source_files_properties(ares ${ARES_HEADER_SOURCES} PROPERTIES HEADER_FILE_ONLY TRUE)

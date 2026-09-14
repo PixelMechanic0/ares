@@ -7,6 +7,7 @@ auto VI::serialize(serializer& s) -> void {
   s(io.divot);
   s(io.serrate);
   s(io.antialias);
+  s(io.ditherFilter);
   s(io.reserved);
   s(io.dramAddress);
   s(io.width);

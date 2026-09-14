@@ -1,7 +1,12 @@
-static const string SerializerVersion = "v153";
+static const string SerializerVersion = "v157";
 
 auto System::serialize(bool synchronize) -> serializer {
   serializer s;
+
+  if(_rdpNeedsLoad) {
+    if(!rdp.rendererLoad()) return {};
+    _rdpNeedsLoad = false;
+  }
 
   u32  signature = SerializerSignature;
   char version[16] = {};
@@ -32,6 +37,10 @@ auto System::unserialize(serializer& s) -> bool {
   if(string{version} != SerializerVersion) return false;
 
   if(synchronize) power(/* reset = */ false);
+  if(_rdpNeedsLoad) {
+    if(!rdp.rendererLoad()) return false;
+    _rdpNeedsLoad = false;
+  }
   serialize(s, synchronize);
   return true;
 }

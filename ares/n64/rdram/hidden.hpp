@@ -1,5 +1,28 @@
 struct HiddenRAM {
   u8* data = nullptr;
+  u32 size = 0;
+  std::vector<u8> storage;
+
+  auto allocate(u32 ramSize) -> void {
+    size = ramSize >> 1;
+    storage.resize((size_t)size + 16);
+    data = storage.data();
+  }
+
+  auto reset() -> void {
+    storage.clear();
+    storage.shrink_to_fit();
+    data = nullptr;
+    size = 0;
+  }
+
+  auto fill(u8 value = 4) -> void {
+    std::fill(storage.begin(), storage.end(), value);
+  }
+
+  auto serialize(serializer& s) -> void {
+    for(u32 index : range(size)) s(data[index]);
+  }
 
   auto nibble(u32 address) -> u32 {
     u8* h = &data[address >> 1];

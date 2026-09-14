@@ -39,7 +39,7 @@ private:
     bool dd = false;
   } information;
   
-  atomic<bool> _vulkanNeedsLoad = false;
+  atomic<bool> _rdpNeedsLoad = false;
 
   auto initDebugHooks() -> void;
   auto _power(bool reset) -> void;

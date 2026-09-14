@@ -23,17 +23,13 @@ auto load(Node::System& node, string name) -> bool {
 }
 
 auto option(string name, string value) -> bool {
-  #if defined(VULKAN)
-  if(name == "Enable GPU acceleration") vulkan.enable = value.boolean();
-  if(name == "Quality" && value == "SD" ) vulkan.internalUpscale = 1;
-  if(name == "Quality" && value == "HD" ) vulkan.internalUpscale = 2;
-  if(name == "Quality" && value == "UHD") vulkan.internalUpscale = 4;
-  if(name == "Supersampling") vulkan.supersampleScanout = value.boolean();
-  if(name == "Disable Video Interface Processing") vulkan.disableVideoInterfaceProcessing = value.boolean();
-  if(name == "Weave Deinterlacing") vulkan.weaveDeinterlacing = value.boolean();
-  if(vulkan.internalUpscale == 1) vulkan.supersampleScanout = false;
-  vulkan.outputUpscale = vulkan.supersampleScanout ? 1 : vulkan.internalUpscale;
-  #endif
+  if(name == "Quality" && value == "SD" ) rdp.rendererScale = 1;
+  if(name == "Quality" && value == "HD" ) rdp.rendererScale = 2;
+  if(name == "Quality" && value == "UHD") rdp.rendererScale = 2;
+  if(name == "Disable VI Dither Filter") rdp.disableVIDitherFilter = value.boolean();
+  if(name == "Disable VI Divot Filter") rdp.disableVIDivotFilter = value.boolean();
+  if(name == "Disable VI Gamma Dither") rdp.disableVIGammaDither = value.boolean();
+  if(name == "Disable VI Anti-Aliasing") rdp.disableVIAntiAliasing = value.boolean();
   if(name == "Homebrew Mode") system.homebrewMode = value.boolean();
   if(name == "Deterministic Entropy") system.deterministicEntropy = value.boolean();
   if(name == "Recompiler") {
@@ -81,9 +77,9 @@ auto System::game() -> string {
 }
 
 auto System::run() -> void {
-  if(_vulkanNeedsLoad) {
-    vulkan.load(node);
-    _vulkanNeedsLoad = false;
+  if(_rdpNeedsLoad) {
+    if(!rdp.rendererLoad()) rdp.crash("software renderer initialization failed");
+    _rdpNeedsLoad = false;
   }
   cpu.main();
 }
@@ -145,7 +141,7 @@ auto System::load(Node::System& root, string name) -> bool {
   if(model() == Model::Aleck64) aleck64.load(node);
 
   initDebugHooks();
-  _vulkanNeedsLoad = true;
+  _rdpNeedsLoad = true;
 
   return true;
 }
@@ -389,10 +385,8 @@ auto System::unload() -> void {
   save();
 
   if(vi.screen) vi.screen->quit(); //stop video thread
-  #if defined(VULKAN)
-  vulkan.unload();
-  _vulkanNeedsLoad = false;
-  #endif
+  rdp.rendererUnload();
+  _rdpNeedsLoad = false;
   cartridgeSlot.unload();
   controllerPort1.unload();
   controllerPort2.unload();
@@ -449,10 +443,8 @@ auto System::power(bool reset) -> void {
   if(_DD()) dd.power(reset);
   mi.power(reset);
   vi.power(reset);
-  #if defined(VULKAN)
-  vulkan.unload();
-  _vulkanNeedsLoad = true;
-  #endif
+  rdp.rendererUnload();
+  _rdpNeedsLoad = true;
   ai.power(reset);
   pi.power(reset);
   pif.power(reset);

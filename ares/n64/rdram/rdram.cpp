@@ -15,12 +15,14 @@ auto RDRAM::load(Node::Object parent) -> void {
   } else {
     ram.allocate(4_MiB + 4_MiB);
   }
+  hidden.allocate(ram.size);
 
   debugger.load(node);
 }
 
 auto RDRAM::unload() -> void {
   debugger = {};
+  hidden.reset();
   ram.reset();
   node.reset();
 }
@@ -28,6 +30,7 @@ auto RDRAM::unload() -> void {
 auto RDRAM::power(bool reset) -> void {
   if(!reset) {
     ram.fill();
+    hidden.fill();
     u32 count = system.expansionPak ? 4 : 2;
     for(u32 n : range(4)) {
       auto& chip = chips[n];

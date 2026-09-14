@@ -13,6 +13,7 @@ auto VI::readWord(u32 address, Thread& thread) -> u32 {
     data.bit( 7)    = io.reserved.bit(7);
     data.bit( 8, 9) = io.antialias;
     data.bit(10,15) = io.reserved.bit(10,15);
+    data.bit(16)    = io.ditherFilter;
   }
 
   if(address == 1) {
@@ -100,10 +101,6 @@ auto VI::writeWord(u32 address, u32 data_, Thread& thread) -> void {
   address = (address & 0x3f) >> 2;
   n32 data = data_;
 
-  #if defined(VULKAN)
-  if (vulkan.enable) vulkan.writeWord(address, data);
-  #endif
-
   if(address == 0) {
     //VI_CONTROL
     io.colorDepth          = data.bit( 0, 1);
@@ -115,6 +112,7 @@ auto VI::writeWord(u32 address, u32 data_, Thread& thread) -> void {
     io.reserved.bit(7)     = data.bit( 7);
     io.antialias           = data.bit( 8, 9);
     io.reserved.bit(10,15) = data.bit(10,15);
+    io.ditherFilter        = data.bit(16);
   }
 
   if(address == 1) {
@@ -193,4 +191,28 @@ auto VI::writeWord(u32 address, u32 data_, Thread& thread) -> void {
   }
 
   debugger.io(Write, address, data);
+}
+
+auto VI::registers() const -> Registers {
+  Registers registers;
+  registers.status = io.colorDepth
+    | io.gammaDither << 2 | io.gamma << 3 | io.divot << 4
+    | io.reserved.bit(5) << 5 | io.serrate << 6
+    | io.reserved.bit(7) << 7 | io.antialias << 8
+    | io.reserved.bit(10, 15) << 10 | io.ditherFilter << 16;
+  registers.origin = io.dramAddress;
+  registers.width = io.width;
+  registers.intr = io.coincidence;
+  registers.current = io.field;
+  registers.timing = io.hsyncWidth | io.colorBurstWidth << 8
+    | io.vsyncWidth << 16 | io.colorBurstHsync << 20;
+  registers.vSync = io.halfLinesPerField;
+  registers.hSync = io.quarterLineDuration | io.leapPattern << 16;
+  registers.leap = io.hsyncLeap[0] | io.hsyncLeap[1] << 16;
+  registers.hStart = io.hend | io.hstart << 16;
+  registers.vStart = io.vend | io.vstart << 16;
+  registers.vBurst = io.colorBurstEnd | io.colorBurstStart << 16;
+  registers.xScale = io.xscale | io.xsubpixel << 16;
+  registers.yScale = io.yscale | io.ysubpixel << 16;
+  return registers;
 }
