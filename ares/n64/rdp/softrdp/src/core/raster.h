@@ -141,6 +141,8 @@ void raster_setup_rectangle_span(int x_begin,
 sr_result raster_decode_triangle(const rdp_command *cmd, raster_decoded_triangle *out);
 sr_result raster_submit_triangle(sr_memory *memory, tmem_state *tmem, const rdp_state *state, const rdp_command *cmd);
 sr_result raster_submit_rectangle(sr_memory *memory, tmem_state *tmem, const rdp_state *state, const rdp_command *cmd);
+/* Fill_Rect, with the span-buffer stale read on back-to-back repeats. */
+sr_result raster_submit_fill_rectangle(sr_memory *memory, tmem_state *tmem, rdp_state *state, const rdp_command *cmd);
 
 /* Renders one span with the kernel its primitive selected (kernel.c). */
 sr_result kernel_render_span(sr_memory *memory,

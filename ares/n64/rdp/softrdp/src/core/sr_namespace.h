@@ -49,6 +49,7 @@
 #define raster_setup_triangle_span SR_NS(raster_setup_triangle_span)
 #define raster_decode_triangle SR_NS(raster_decode_triangle)
 #define raster_submit_rectangle SR_NS(raster_submit_rectangle)
+#define raster_submit_fill_rectangle SR_NS(raster_submit_fill_rectangle)
 #define raster_submit_triangle SR_NS(raster_submit_triangle)
 #define rdp_blender_decode SR_NS(rdp_blender_decode)
 #define rdp_combiner_decode SR_NS(rdp_combiner_decode)

@@ -115,6 +115,19 @@ static raster_depth_setup decode_depth_setup(const uint32_t *w)
     return setup;
 }
 
+/* A triangle without a z block still runs the z pipe; othermode decides
+ * whether it compares and writes. The coefficient loader latches the
+ * triangle's own header doubleword into both z-block slots:
+ * z = dzde = hi32, dzdx = dzdy = lo32. */
+static raster_depth_setup decode_header_depth_setup(const uint32_t *w)
+{
+    raster_depth_setup setup;
+
+    setup.z = setup.dzde = (int32_t)w[0];
+    setup.dzdx = setup.dzdy = (int32_t)w[1];
+    return setup;
+}
+
 /*
  * Lift a triangle setup into raster space.
  *
@@ -516,6 +529,18 @@ sr_result raster_decode_triangle(const rdp_command *cmd, raster_decoded_triangle
     out->position = decode_triangle_setup(cmd);
 
     switch (cmd->id) {
+    case RDP_CMD_FILL_TRIANGLE:
+    case RDP_CMD_TEXTURE_TRIANGLE:
+    case RDP_CMD_SHADE_TRIANGLE:
+    case RDP_CMD_SHADE_TEXTURE_TRIANGLE:
+        out->has_depth = true;
+        out->depth = decode_header_depth_setup(&cmd->words[0]);
+        break;
+    default:
+        break;
+    }
+
+    switch (cmd->id) {
     case RDP_CMD_FILL_TRIANGLE:                   return SR_OK;
     case RDP_CMD_FILL_ZBUFFER_TRIANGLE:           out->has_depth = true; out->depth = decode_depth_setup(&cmd->words[8]); return SR_OK;
     case RDP_CMD_TEXTURE_TRIANGLE:                out->has_texture = true; out->texture = decode_texture_setup(&cmd->words[8]); return SR_OK;
@@ -830,10 +855,16 @@ static sr_result submit_texture_rectangle(sr_memory *memory,
 {
     const rdp_rect_cmd *rect_cmd = &cmd->decoded.rect;
     const uint32_t tile_index = rect_cmd->tile_index;
-    const int32_t s0 = rect_cmd->s0 * 32;
-    const int32_t t0 = rect_cmd->t0 * 32;
-    const bool flip = rect_cmd->flip;
     const bool copy = state->other_modes.cycle_type == RDP_CYCLE_COPY;
+    /* A copy-mode fill's zeroed (s, t, w) goes through the perspective
+     * divide, and the copy pipe has no clamp stage: the w <= 0 carry
+     * saturates both coordinates to +0x7fff, which fetches texel
+     * (1023, 1023). */
+    const bool fill_saturates = cmd->id == RDP_CMD_FILL_RECTANGLE &&
+        state->other_modes.perspective;
+    const int32_t s0 = (fill_saturates ? 0x7fff : rect_cmd->s0) * 32;
+    const int32_t t0 = (fill_saturates ? 0x7fff : rect_cmd->t0) * 32;
+    const bool flip = rect_cmd->flip;
     const bool byte_copy = copy && state->color_image.size <= RDP_SIZE_8BPP;
     /* See the triangle path: this latch is shared by the whole command. */
     const bool ordered_hidden = byte_copy ||
@@ -968,11 +999,22 @@ static sr_result raster_submit_rectangle_internal(sr_memory *memory,
 {
     raster_rect rect;
 
-    if (cmd->id == RDP_CMD_TEXTURE_RECTANGLE || cmd->id == RDP_CMD_TEXTURE_RECTANGLE_FLIP) {
+    /* Fill_Rect in copy mode runs the copy pipe with all-zero texture
+     * attributes (tile 0, s = t = 0, no derivatives), which decode_rect
+     * leaves in place; they are not the ones a previous command latched. */
+    const bool texture_rect = cmd->id == RDP_CMD_TEXTURE_RECTANGLE ||
+                              cmd->id == RDP_CMD_TEXTURE_RECTANGLE_FLIP;
+    const bool fill_cycle = state->other_modes.cycle_type == RDP_CYCLE_FILL;
+    if ((texture_rect && !fill_cycle) ||
+        (cmd->id == RDP_CMD_FILL_RECTANGLE &&
+         state->other_modes.cycle_type == RDP_CYCLE_COPY)) {
         return submit_texture_rectangle(memory, tmem, state, cmd);
     }
 
-    if (cmd->id != RDP_CMD_FILL_RECTANGLE) {
+    /* In fill mode a Texture_Rectangle is drawn like a Fill_Rect: the fill
+     * pipe writes the fill colour over the same bounds and ignores the
+     * texture. */
+    if (!texture_rect && cmd->id != RDP_CMD_FILL_RECTANGLE) {
         return SR_OK;
     }
     /* Keep the command-global byte latch on the lead worker. */
@@ -1057,6 +1099,90 @@ sr_result raster_submit_rectangle(sr_memory *memory,
                                   const rdp_command *cmd)
 {
     return raster_submit_rectangle_internal(memory, tmem, state, cmd);
+}
+
+/*
+ * Span-buffer stale read. The command processor runs ahead of the pixel
+ * pipeline: a span of W columns at cyc cycles per pixel takes
+ * L = max(cyc*W + cyc - 1, 4) clocks, and the processor leads by
+ * D = min(3L - 2, 25). When D > L, a rectangle's framebuffer reads precede its
+ * predecessor's commit of the same pixels and see the image from before the
+ * predecessor ran, so a stack of repeats advances every other primitive.
+ * Only the measured shape is modelled: identical single-row 1-/2-cycle
+ * Fill_Rects issued back to back into a 16bpp image with image_read set and
+ * atomic_prim clear. Returns the samples of the footprint this worker renders,
+ * or 0 when the rectangle is not eligible.
+ */
+static uint32_t rect_stale_footprint(const sr_memory *memory, const rdp_state *state,
+                                     const rdp_command *cmd, uint32_t *slots,
+                                     uint32_t *samples)
+{
+    const rdp_other_modes *modes = &state->other_modes;
+    const rdp_rect_cmd *r = &cmd->decoded.rect;
+    if ((modes->cycle_type != RDP_CYCLE_1 && modes->cycle_type != RDP_CYCLE_2) ||
+        !modes->image_read || modes->atomic_prim ||
+        state->color_image.size != RDP_SIZE_16BPP)
+        return 0u;
+    const uint32_t w = (uint32_t)(r->xl >> 2) - (uint32_t)(r->xh >> 2);
+    const uint32_t h = (uint32_t)(r->yl >> 2) - (uint32_t)(r->yh >> 2);
+    const uint32_t cyc = modes->cycle_type == RDP_CYCLE_2 ? 2u : 1u;
+    const uint32_t span = cyc * w + cyc - 1u;
+    const uint32_t l = span < 4u ? 4u : span;
+    const uint32_t d = 3u * l - 2u < 25u ? 3u * l - 2u : 25u;
+    if (h != 1u || w < 1u || w > 32u || d <= l) return 0u;
+
+    raster_rect rect = { .x0 = r->x0, .y0 = r->y0, .x1 = r->x1, .y1 = r->y1 };
+    if (!clip_rect_to_scissor(&rect, state)) return 0u;
+    scale_rect(&rect);
+    rdp_framebuffer_state framebuffer;
+    primitive_compile_framebuffer(&framebuffer, state);
+    const uint32_t stride = state->worker_stride ? state->worker_stride : 1u;
+    uint32_t count = 0u;
+    for (uint32_t y = rect.y0; y <= rect.y1; y++) {
+        if (!scissor_accepts_raster_y(state, y) || (y % stride) != state->worker_offset)
+            continue;
+        for (uint32_t x = rect.x0; x <= rect.x1; x++) {
+            const uint32_t slot = framebuffer_slot(memory, &framebuffer, x, y);
+            if (slot == FB_SLOT_NONE) continue;
+            if (count == RDP_RECT_STALE_MAX) return 0u;
+            slots[count] = slot;
+            samples[count] = sr_sample_of(x, y);
+            count++;
+        }
+    }
+    return count;
+}
+
+sr_result raster_submit_fill_rectangle(sr_memory *memory, tmem_state *tmem,
+                                       rdp_state *state, const rdp_command *cmd)
+{
+    rdp_rect_stale *stale = &state->rect_stale;
+    uint32_t slots[RDP_RECT_STALE_MAX], samples[RDP_RECT_STALE_MAX];
+    const uint32_t count = memory
+        ? rect_stale_footprint(memory, state, cmd, slots, samples) : 0u;
+    if (count == 0u) {
+        stale->valid = false;
+        return raster_submit_rectangle(memory, tmem, state, cmd);
+    }
+    const bool repeat = stale->valid && stale->count == count &&
+        stale->words[0] == cmd->words[0] && stale->words[1] == cmd->words[1];
+    uint16_t image[RDP_RECT_STALE_MAX];
+    for (uint32_t i = 0; i < count; i++)
+        image[i] = (uint16_t)framebuffer_load_raw(memory, RDP_SIZE_16BPP,
+                                                  slots[i], samples[i]);
+    /* A repeat reads its predecessor's pre-image: put it back, draw over it,
+     * and pass the predecessor's output on as the next repeat's pre-image. */
+    if (repeat)
+        for (uint32_t i = 0; i < count; i++)
+            framebuffer_store_raw(memory, RDP_SIZE_16BPP, slots[i], stale->pre[i],
+                                  samples[i]);
+    const sr_result result = raster_submit_rectangle(memory, tmem, state, cmd);
+    stale->valid = true;
+    stale->count = count;
+    stale->words[0] = cmd->words[0];
+    stale->words[1] = cmd->words[1];
+    memcpy(stale->pre, image, count * sizeof(image[0]));
+    return result;
 }
 
 /* The attribute latch of scanline y: its value at the major edge pixel, which

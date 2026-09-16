@@ -87,6 +87,8 @@ typedef struct rdp_other_modes {
     uint8_t z_mode;
     uint8_t rgb_dither;
     uint8_t alpha_dither;
+    /* Stalls the command processor per primitive (raster_submit_fill_rectangle). */
+    bool atomic_prim;
 } rdp_other_modes;
 
 typedef enum rdp_combiner_source {
@@ -167,6 +169,16 @@ typedef struct rdp_tile_bounds {
     uint32_t th;
 } rdp_tile_bounds;
 
+/* Two rows of up to 33 pixels at up to 2x2 samples. */
+#define RDP_RECT_STALE_MAX 264u
+
+typedef struct rdp_rect_stale {
+    uint32_t words[2];
+    uint32_t count;
+    bool valid;
+    uint16_t pre[RDP_RECT_STALE_MAX];
+} rdp_rect_stale;
+
 typedef struct rdp_state {
     rdp_image color_image;
     rdp_image texture_image;
@@ -210,6 +222,10 @@ typedef struct rdp_state {
     /* Chroma key: SET_KEY_R/GB's 12-bit widths and SET_OTHER_MODES bit 8. */
     uint16_t key_width[3];
     bool key_enable;
+    /* Span-buffer stale read (raster_submit_fill_rectangle): the last eligible
+     * Fill_Rect's command words and the framebuffer samples this worker drew
+     * for it, as they were before it ran. Any other command clears it. */
+    rdp_rect_stale rect_stale;
 } rdp_state;
 
 /*
@@ -388,6 +404,9 @@ typedef struct rdp_fragment_state {
     uint8_t coverage_dest;
     uint8_t rgb_dither;
     uint8_t alpha_dither;
+    /* Right shift of the row before it indexes the dither matrix: 1 under an
+     * interlaced (field) scissor, which dithers on row bits [2:1]. */
+    uint8_t dither_y_shift;
 } rdp_fragment_state;
 
 static inline uint8_t expand_5_to_8(uint32_t value)

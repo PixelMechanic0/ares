@@ -57,16 +57,6 @@ typedef enum vi_scanout_state {
     VI_SCANOUT_HOLD
 } vi_scanout_state;
 
-typedef struct vi_x_sample {
-    uint16_t source_x;
-    uint8_t fraction;
-} vi_x_sample;
-
-typedef struct vi_y_sample {
-    uint16_t source_y;
-    uint8_t fraction;
-} vi_y_sample;
-
 /* The horizontal walk of one output row: which columns carry the framebuffer
  * and where they sample it (see the fields of the same names below). */
 typedef struct vi_x_window {
@@ -83,8 +73,7 @@ typedef struct vi_scanout_plan {
     uint32_t source_stride;
     uint32_t source_width;
     uint32_t bytes_per_pixel;
-    /* The sampling grid: one entry per hardware output pixel, which is what
-     * x_samples/y_samples are indexed by. */
+    /* Hardware output dimensions before internal-resolution scaling. */
     uint32_t output_width;
     uint32_t output_height;
     /* The pixel buffer handed to the caller, which is what sr_get_vi_frame_info
@@ -94,17 +83,7 @@ typedef struct vi_scanout_plan {
      * display_height describe. */
     uint32_t scanout_width;
     uint32_t scanout_height;
-    /*
-     * The sampling walk, in the source's own units.
-     *
-     * x_samples/y_samples above tabulate it for the hardware output grid. A
-     * scaled build has SOFTRDP_SCALE times as many output pixels AND
-     * SOFTRDP_SCALE times as many source samples, and those two cancel: the
-     * step per output pixel is unchanged and only the start scales. Indexing
-     * the hardware table and picking a sub-sample instead would place samples
-     * at the wrong output positions - pairs bunched together with interpolated
-     * gaps between them, rather than evenly spread.
-     */
+    /* Source sample walk: scaling changes the start, not the step. */
     uint32_t sample_x_start;
     uint32_t sample_x_add;
     uint32_t sample_y_start;
@@ -131,8 +110,6 @@ typedef struct vi_scanout_plan {
     bool per_row_x;
     vi_x_window windows[VI_MAX_SCANLINE_REGS + 1u];
     uint8_t row_window[VI_MAX_OUTPUT_HEIGHT];
-    vi_x_sample x_samples[VI_MAX_OUTPUT_WIDTH];
-    vi_y_sample y_samples[VI_MAX_OUTPUT_HEIGHT];
 } vi_scanout_plan;
 
 void vi_init(vi_state *vi);

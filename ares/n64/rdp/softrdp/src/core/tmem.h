@@ -693,6 +693,29 @@ static inline bool tmem_fetch_color_local(const tmem_state *tmem,
     }
 
     if (tile->format == RDP_FORMAT_YUV) {
+        if (tile->size == RDP_SIZE_32BPP) {
+            /* YUV at size 3 is illegal; the RDP addresses it at 32bpp texel
+             * rate. A 32-bit unit holds a UYVY pair, so the pair index is
+             * s >> 1, the line term doubles, and the odd-line swap applies to
+             * the pair index. Address bit 1 of the in-row word is the OR of
+             * the 16-bit-rate and 32bpp-rate drivers. Chroma is the addressed
+             * low-bank word; luma is byte (s & 1) of that word in the high
+             * bank. The halfword index equals the byte row base numerically. */
+            const uint32_t m = ((local_s >> 1) ^ ((local_t & 1u) << 1)) & 0x1ffu;
+            const uint32_t inrow = ((m >> 1) << 2) |
+                                   (((m | (m >> 1)) & 1u) << 1) | (m & 1u);
+            const uint32_t word = (sample->tile.tmem + local_t * sample->stride +
+                                   inrow) & 0x3ffu;
+            const uint16_t uv = tmem_read_native16(tmem,
+                tmem_physical_word_byte(word << 1) & 0x7ffu);
+            const uint32_t y_addr = (tmem_physical_byte(
+                ((word << 1) | (local_s & 1u)) & 0x7ffu) & 0x7ffu) | 0x800u;
+            color->r = (uint8_t)((int32_t)(uint8_t)(uv >> 8) - 128);
+            color->g = (uint8_t)((int32_t)(uint8_t)uv - 128);
+            color->b = tmem->bytes[y_addr];
+            color->a = color->b;
+            return true;
+        }
         if (tile->size != RDP_SIZE_16BPP) {
             return false;
         }

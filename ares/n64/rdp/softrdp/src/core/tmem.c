@@ -160,7 +160,13 @@ static sr_result load_lines(tmem_state *tmem, const sr_memory *memory,
                 (((int32_t)step * step_t) >> 8)) - t_origin) >> coord_shift;
             const bool odd = (t & 1) != 0;
             const uint32_t row = ((line_words * (uint32_t)t) & 0x1ffu) + base_words;
-            const uint32_t halfwords = (uint32_t)(s >> halfword_shift) & 0x7ffu;
+            /* A YUV split lands two low-bank halfwords per 8-byte step, so its
+             * position follows the source bytes: the image's texel size, not
+             * the 16bpp rate. A 32bpp image (the illegal YUV size 3) moves S
+             * by only two texels a step. */
+            const uint32_t halfwords = split_yuv
+                ? (uint32_t)((int32_t)((uint32_t)s << size) >> 3) & 0x7ffu
+                : (uint32_t)(s >> halfword_shift) & 0x7ffu;
             const uint32_t first = ((row << 2) + halfwords) & 0x7fdu;
 
             uint64_t data;

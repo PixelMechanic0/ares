@@ -178,8 +178,10 @@ sr_result framebuffer_fill_rect(sr_memory *memory, const rdp_framebuffer_state *
     /* The clamp is on the raster grid, which is where the rectangle now is. */
     const uint32_t raster_width =
         (uint32_t)sr_pixel_to_raster((int32_t)state->color_image.width);
+    /* Fill addresses the image linearly and its right edge is inclusive, so a
+     * span ending at the image width writes that column into column 0 of the
+     * next scanline. No clamp to the width; the RDRAM bound still holds. */
     if (x1 < x0 || y1 < y0 || x0 >= raster_width) return SR_OK;
-    if (x1 >= raster_width) x1 = raster_width - 1u;
 
 #if SOFTRDP_SCALE > 1
     return fill_rect_samples(memory, state, x0, y0, x1, y1, worker_offset,

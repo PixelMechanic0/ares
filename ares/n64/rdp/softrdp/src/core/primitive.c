@@ -68,13 +68,10 @@ static void compile_depth_delta_state(rdp_depth_state *depth,
 {
     const uint16_t value = compile_depth_delta(depth, triangle);
     depth->pixel_delta = value;
-    /* Primitive delta metadata is encoded in expanded depth units, while the
-     * live comparison retains the normalized command value above. */
-    const uint16_t encoded_value = depth->source_primitive
-        ? normalize_depth_delta((uint32_t)depth->primitive_delta_z << 2u)
-        : value;
+    /* The stored delta exponent is that of the delta the comparison uses; a
+     * primitive delta is not rescaled first.*/
     uint32_t exponent = 0u;
-    for (uint32_t bits = encoded_value; bits >>= 1u;) exponent++;
+    for (uint32_t bits = value; bits >>= 1u;) exponent++;
     depth->delta_exponent = (uint8_t)exponent;
     depth->blend_shift = (uint8_t)((exponent < 11u ? 4u : 15u - exponent) << 4);
 }
@@ -303,6 +300,9 @@ static void primitive_compile_common(rdp_primitive_state *primitive,
     primitive->fragment.coverage_dest = registers->other_modes.coverage_dest;
     primitive->fragment.rgb_dither = registers->other_modes.rgb_dither;
     primitive->fragment.alpha_dither = registers->other_modes.alpha_dither;
+    /* An interlaced (field) scissor indexes the dither matrix with row bits
+     * [2:1] instead of [1:0]; noise dither keeps the real coordinates. */
+    primitive->fragment.dither_y_shift = registers->scissor_field ? 1u : 0u;
     /* Dither mode 2 is the noise mode for both channels, and a dithered alpha
      * compare draws its threshold from the same hash. Any of them makes the
      * kernel compute it. */
@@ -315,20 +315,20 @@ static void primitive_compile_common(rdp_primitive_state *primitive,
     primitive->tmem = tmem;
 }
 
-/* Copy fetches use a fixed 10-bit coordinate domain and do not apply the
- * ordinary tile clamp. Keep this normalization in compilation so both copy
- * renderers receive an already-specialized, immutable texture state. */
+/* Copy fetches do not apply the ordinary tile clamp, and a mask wider than 10
+ * bits acts as 10. An unmasked axis stays unmasked: a copy group's later
+ * members step past texel 1023 and address on into TMEM, which wraps. Keep
+ * this normalization in compilation so both copy renderers receive an
+ * already-specialized, immutable texture state. */
 static void primitive_compile_copy_texture(rdp_texture_sample_state *texture)
 {
     if (!texture) return;
     texture->tile.clamp_s = 0u;
     texture->tile.clamp_t = 0u;
-    if (!texture->tile.mask_s) texture->tile.mask_s = 10u;
-    if (!texture->tile.mask_t) texture->tile.mask_t = 10u;
     if (texture->tile.mask_s > 10u) texture->tile.mask_s = 10u;
     if (texture->tile.mask_t > 10u) texture->tile.mask_t = 10u;
-    texture->width = (uint16_t)(1u << texture->tile.mask_s);
-    texture->height = (uint16_t)(1u << texture->tile.mask_t);
+    if (texture->tile.mask_s) texture->width = (uint16_t)(1u << texture->tile.mask_s);
+    if (texture->tile.mask_t) texture->height = (uint16_t)(1u << texture->tile.mask_t);
     tmem_compile_axes(texture);
 }
 
@@ -468,7 +468,6 @@ static _Thread_local uint32_t cache_tile;
 static _Thread_local uint8_t cache_max_level;
 static _Thread_local bool cache_has_texture;
 static _Thread_local bool cache_has_shade;
-static _Thread_local bool cache_has_depth;
 static _Thread_local bool cache_fill_mode;
 static _Thread_local bool cache_valid;
 static _Thread_local bool cache_dirty;
@@ -502,7 +501,6 @@ const rdp_primitive_state *primitive_compile_triangle_cached(
         cache_max_level == triangle->position.max_level &&
         cache_has_texture == triangle->has_texture &&
         cache_has_shade == triangle->has_shade &&
-        cache_has_depth == triangle->has_depth &&
         cache_fill_mode == fill_mode;
 
     if (!hit) {
@@ -513,7 +511,6 @@ const rdp_primitive_state *primitive_compile_triangle_cached(
         cache_max_level = triangle->position.max_level;
         cache_has_texture = triangle->has_texture;
         cache_has_shade = triangle->has_shade;
-        cache_has_depth = triangle->has_depth;
         cache_fill_mode = fill_mode;
         return &cache_primitive;
     }
@@ -526,6 +523,11 @@ const rdp_primitive_state *primitive_compile_triangle_cached(
     return &cache_primitive;
 }
 
+/* A rectangle has no z slopes. Its depth delta - the stored dz, the compare
+ * tolerance and the blend shift - comes from the primitive depth, or is the
+ * smallest delta, exactly as for a triangle whose slopes are zero. */
+static const raster_decoded_triangle rectangle_depth_slopes;
+
 void primitive_compile_rectangle(rdp_primitive_state *primitive,
                                 const rdp_state *registers,
                                 const tmem_state *tmem,
@@ -536,6 +538,7 @@ void primitive_compile_rectangle(rdp_primitive_state *primitive,
     }
 
     primitive_compile_common(primitive, registers, tmem, tile_index);
+    compile_depth_delta_state(&primitive->fragment.depth, &rectangle_depth_slopes);
     const bool copy = registers->other_modes.cycle_type == RDP_CYCLE_COPY;
     primitive->kernel = copy ? RDP_KERNEL_TEXTURE_RECTANGLE_COPY
                                   : RDP_KERNEL_TEXTURE_RECTANGLE;
@@ -549,6 +552,7 @@ void primitive_compile_color_rectangle(rdp_primitive_state *primitive,
 {
     if (!primitive || !registers) return;
     primitive_compile_common(primitive, registers, tmem, 0u);
+    compile_depth_delta_state(&primitive->fragment.depth, &rectangle_depth_slopes);
     primitive->kernel = RDP_KERNEL_TEXTURE_RECTANGLE;
     primitive_compile_plan(primitive, false, false, false, 0u);
 }

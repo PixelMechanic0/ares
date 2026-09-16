@@ -89,7 +89,8 @@ static SR_ALWAYS_INLINE sr_result finish_write(sr_memory *memory,
     }
     const uint32_t pixel_x = sr_raster_to_pixel(x);
     const uint32_t pixel_y = sr_raster_to_pixel(y);
-    pixel = stage_dither_rgb(pixel, state->rgb_dither, pixel_x, pixel_y, noise);
+    pixel = stage_dither_rgb(pixel, state->rgb_dither, pixel_x,
+                             pixel_y >> state->dither_y_shift, noise);
     return framebuffer_write_color_address(memory, RDP_SIZE_16BPP, color_address,
         pixel_y * primitive->framebuffer.color_image.width + pixel_x,
         sr_sample_of(x, y), pixel);

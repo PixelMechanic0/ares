@@ -315,13 +315,12 @@ void vi_build_scanout_plan(const vi_state *vi, const sr_memory *memory,
     for (uint32_t x = 0; x < plan->output_width; x++) {
         const uint32_t coordinate = x_start +
             (x - (uint32_t)window_x_begin) * x_add;
-        plan->x_samples[x].source_x = (uint16_t)(coordinate >> 10);
-        plan->x_samples[x].fraction = (uint8_t)((coordinate >> 5) & 31u);
+        const uint32_t source_x = (uint16_t)(coordinate >> 10);
         /* Only active columns are fetched, so blanked guard-band columns must
          * not widen the source extent or the memory range check. */
         if (x >= plan->active_x_begin && x < plan->active_x_end &&
-            plan->x_samples[x].source_x > max_x)
-            max_x = plan->x_samples[x].source_x;
+            source_x > max_x)
+            max_x = source_x;
     }
     plan->windows[0] = (vi_x_window){
         plan->sample_x_start, plan->sample_x_add,
@@ -348,9 +347,8 @@ void vi_build_scanout_plan(const vi_state *vi, const sr_memory *memory,
         const uint32_t field_y = y - plan->active_y_begin;
         const uint32_t coordinate = y_start +
             field_y * y_add;
-        plan->y_samples[y].source_y = (uint16_t)(coordinate >> 10);
-        plan->y_samples[y].fraction = (uint8_t)((coordinate >> 5) & 31u);
-        if (plan->y_samples[y].source_y > max_y) max_y = plan->y_samples[y].source_y;
+        const uint32_t source_y = (uint16_t)(coordinate >> 10);
+        if (source_y > max_y) max_y = source_y;
     }
 
     const bool interpolate = plan->aa_mode != VI_AA_REPLICATE;
@@ -1009,8 +1007,6 @@ static void vi_execute_identity_rows(const vi_scanout_job *job,
         const uint32_t band_end = window->active_x_end * (uint32_t)SOFTRDP_SCALE;
         const uint32_t active_begin = band_begin < width ? band_begin : width;
         const uint32_t active_end = band_end < width ? band_end : width;
-        /* Walk the scaled grid: one step per output pixel, in source samples.
-         * At scale 1 this reproduces y_samples exactly. */
         const uint32_t y_coordinate =
             vi_output_y_coordinate(plan, y, active_y_begin);
         const uint32_t scaled_row = y_coordinate >> 10;

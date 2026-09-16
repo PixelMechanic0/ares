@@ -107,6 +107,7 @@ static void decode_set_scissor(rdp_set_scissor_cmd *cmd, uint32_t w0, uint32_t w
 
 static void decode_set_other_modes(rdp_other_modes *modes, uint32_t w0, uint32_t w1)
 {
+    modes->atomic_prim = (w0 & (1u << 23)) != 0;
     modes->cycle_type = (rdp_cycle_type)((w0 >> 20) & 3u);
     modes->perspective = (w0 & (1u << 19)) != 0;
     modes->detail_lod = (w0 & (1u << 18)) != 0;
@@ -281,6 +282,9 @@ sr_result rdp_execute_command(sr_memory *memory,
      * Triangle draws refresh it themselves. */
     if (cmd->id < RDP_CMD_FILL_TRIANGLE || cmd->id > RDP_CMD_SHADE_TEXTURE_ZBUFFER_TRIANGLE)
         primitive_cache_invalidate();
+    /* A stale read needs its predecessor issued immediately before it. */
+    if (cmd->id != RDP_CMD_FILL_RECTANGLE)
+        state->rect_stale.valid = false;
 
     switch (cmd->id) {
     case RDP_CMD_NO_OP:
@@ -361,8 +365,8 @@ sr_result rdp_execute_command(sr_memory *memory,
     case RDP_CMD_SHADE_TEXTURE_ZBUFFER_TRIANGLE:  state->primitive_counter++; return raster_submit_triangle(memory, tmem, state, cmd);
 
     case RDP_CMD_TEXTURE_RECTANGLE:
-    case RDP_CMD_TEXTURE_RECTANGLE_FLIP:
-    case RDP_CMD_FILL_RECTANGLE:                  state->primitive_counter++; return raster_submit_rectangle(memory, tmem, state, cmd);
+    case RDP_CMD_TEXTURE_RECTANGLE_FLIP:          state->primitive_counter++; return raster_submit_rectangle(memory, tmem, state, cmd);
+    case RDP_CMD_FILL_RECTANGLE:                  state->primitive_counter++; return raster_submit_fill_rectangle(memory, tmem, state, cmd);
 
     case RDP_CMD_LOAD_BLOCK: {
         rdp_tile *tile = &state->tiles[cmd->decoded.load.tile_index];

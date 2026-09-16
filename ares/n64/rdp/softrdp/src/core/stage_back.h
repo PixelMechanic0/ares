@@ -250,6 +250,7 @@ typedef struct stage_alpha_setup {
     bool dither_invert;
     bool dither_noise;
     bool two_cycle_compare;
+    uint8_t dither_y_shift;
 } stage_alpha_setup;
 
 static inline stage_alpha_setup stage_alpha_prepare(const rdp_fragment_state *state)
@@ -259,7 +260,8 @@ static inline stage_alpha_setup stage_alpha_prepare(const rdp_fragment_state *st
         .dither_invert = false,
         .dither_noise = state->alpha_dither == 2u,
         .two_cycle_compare = state->blend.alpha_compare &&
-                             state->blend.cycle_count == 2u
+                             state->blend.cycle_count == 2u,
+        .dither_y_shift = state->dither_y_shift
     };
     if (state->alpha_dither < 2u) {
         setup.dither_matrix = stage_dither_matrix((state->rgb_dither & 1u) != 0u);
@@ -274,7 +276,8 @@ static SR_ALWAYS_INLINE uint32_t stage_alpha_dither(const stage_alpha_setup *set
 {
     if (setup->dither_noise) return noise & 7u;
     if (!setup->dither_matrix) return 0u;
-    const uint32_t value = setup->dither_matrix[((y & 3u) << 2) | (x & 3u)];
+    const uint32_t value =
+        setup->dither_matrix[(((y >> setup->dither_y_shift) & 3u) << 2) | (x & 3u)];
     return setup->dither_invert ? (~value & 7u) : value;
 }
 
@@ -685,8 +688,8 @@ static SR_ALWAYS_INLINE sr_result stage_write_color(sr_memory *memory,
     /* The blender dithers its output for every image size that stores colour,
      * not only 16bpp. */
     if (size != RDP_SIZE_4BPP)
-        pixel = stage_dither_rgb(pixel, state->rgb_dither,
-                                 sr_raster_to_pixel(x), sr_raster_to_pixel(y),
+        pixel = stage_dither_rgb(pixel, state->rgb_dither, sr_raster_to_pixel(x),
+                                 sr_raster_to_pixel(y) >> state->dither_y_shift,
                                  noise);
     if (size == RDP_SIZE_8BPP)
         return framebuffer_write_color8(memory, color_address, pixel_index,
@@ -734,8 +737,8 @@ static SR_ALWAYS_INLINE sr_result stage_color8(sr_memory *memory,
     pixel = stage_blend(&state->blend, pixel, alpha, memory_pixel.color,
                         shade_alpha, blend_enable, state->color_on_cvg, overflow,
                         depth->blend_shift);
-    *out = stage_dither_rgb(pixel, state->rgb_dither,
-                            sr_raster_to_pixel(x), sr_raster_to_pixel(y), noise);
+    *out = stage_dither_rgb(pixel, state->rgb_dither, sr_raster_to_pixel(x),
+                            sr_raster_to_pixel(y) >> state->dither_y_shift, noise);
     return SR_OK;
 }
 

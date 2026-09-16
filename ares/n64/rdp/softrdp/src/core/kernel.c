@@ -1,3 +1,10 @@
+/*
+ * Copyright (c) 2026 PixelMechanic0
+ * Licensed under the MIT License.
+ *
+ * Project: https://github.com/PixelMechanic0/softrdp
+ */
+
 #include "raster.h"
 #include "framebuffer.h"
 #include "stage_back.h"
@@ -25,8 +32,13 @@ typedef struct kernel_span {
     const rdp_span *work;
     sr_attr step;
     /* Offset from a pixel to its LOD y neighbour. One-cycle mode has no second
-     * cycle to reach the next scanline and uses the second x step instead. */
+     * cycle to reach the next scanline: it measures the pipelined pair P+1 and
+     * P+2 in walking order. At the second-to-last walked pixel of a span whose
+     * four sublines are all valid (lod_end_x) there is no P+2, and it measures
+     * the centred pair P-1, P+1 instead (lod_centre is the P-1 offset). */
     sr_attr lod_y;
+    sr_attr lod_centre;
+    int lod_end_x;
     int32_t shade_dy[4];
     int32_t dzdy;
     stage_combiner_regs regs;
@@ -142,16 +154,16 @@ static SR_ALWAYS_INLINE texture_sample triangle_texture(const kernel_span *span,
     const rdp_primitive_state *primitive = span->primitive;
     int32_t s, t;
     bool lod_clamp = false;
+    bool own_clamped = false;
     if (span->perspective) {
-        bool clamped;
         if (span->lod && cache->x == x) {
             s = cache->s;
             t = cache->t;
-            clamped = cache->clamped;
+            own_clamped = cache->clamped;
         } else {
-            clamped = stage_perspective_divide(a.s, a.t, a.w, &s, &t);
+            own_clamped = stage_perspective_divide(a.s, a.t, a.w, &s, &t);
         }
-        lod_clamp = span->lod && !span->one_cycle && clamped;
+        lod_clamp = span->lod && !span->one_cycle && own_clamped;
     } else {
         s = stage_texcoord_direct(a.s);
         t = stage_texcoord_direct(a.t);
@@ -160,19 +172,20 @@ static SR_ALWAYS_INLINE texture_sample triangle_texture(const kernel_span *span,
         return sample_texels(span, &primitive->texture, &primitive->texture_cycle1,
                              s, t, 0u, full);
 
-    /* The two-cycle x neighbour is the next pixel in walking order, which is
-     * the one to the left in a non-flipped triangle. Its divide is then the
-     * previous pixel's own, so that is what the cache keeps. */
-    const bool back = !span->one_cycle && !primitive->triangle.position.flip;
+    /* The x neighbour is the next pixel in walking order, which is the one to
+     * the left in a non-flipped triangle. Its divide is then the previous
+     * pixel's own, so that is what the cache keeps. */
+    const bool back = !primitive->triangle.position.flip;
     const int32_t xs = back ? (int32_t)((uint32_t)a.s - (uint32_t)span->step.s)
                             : sr_wrap_add(a.s, span->step.s);
     const int32_t xt = back ? (int32_t)((uint32_t)a.t - (uint32_t)span->step.t)
                             : sr_wrap_add(a.t, span->step.t);
     const int32_t xw = back ? (int32_t)((uint32_t)a.w - (uint32_t)span->step.w)
                             : sr_wrap_add(a.w, span->step.w);
-    const int32_t ys = sr_wrap_add(a.s, span->lod_y.s);
-    const int32_t yt = sr_wrap_add(a.t, span->lod_y.t);
-    const int32_t yw = sr_wrap_add(a.w, span->lod_y.w);
+    const sr_attr lod_y = x == span->lod_end_x ? span->lod_centre : span->lod_y;
+    const int32_t ys = sr_wrap_add(a.s, lod_y.s);
+    const int32_t yt = sr_wrap_add(a.t, lod_y.t);
+    const int32_t yw = sr_wrap_add(a.w, lod_y.w);
     int32_t nx_s, nx_t, ny_s, ny_t;
     if (span->perspective) {
         bool clamped_x;
@@ -183,7 +196,7 @@ static SR_ALWAYS_INLINE texture_sample triangle_texture(const kernel_span *span,
         } else {
             clamped_x = stage_perspective_divide(xs, xt, xw, &nx_s, &nx_t);
         }
-        *cache = back ? (divide_cache){ x, s, t, lod_clamp }
+        *cache = back ? (divide_cache){ x, s, t, own_clamped }
                       : (divide_cache){ x + 1, nx_s, nx_t, clamped_x };
         const bool clamped_y = stage_perspective_divide(ys, yt, yw, &ny_s, &ny_t);
         lod_clamp = lod_clamp || clamped_x || clamped_y;
@@ -294,17 +307,36 @@ static void kernel_span_prepare(kernel_span *span,
             sr_scaled_derivative(decoded->texture.dtdx & ~0x1f),
             sr_scaled_derivative(decoded->texture.dwdx & ~0x1f)
         };
+        /* The walk runs right to left in a non-flipped triangle. */
+        const bool back = !decoded->position.flip;
+        const sr_attr walk = {
+            0, 0, 0, 0, 0,
+            back ? (int32_t)(0u - (uint32_t)span->step.s) : span->step.s,
+            back ? (int32_t)(0u - (uint32_t)span->step.t) : span->step.t,
+            back ? (int32_t)(0u - (uint32_t)span->step.w) : span->step.w
+        };
         span->lod_y = span->one_cycle
             ? (sr_attr){ 0, 0, 0, 0, 0,
-                         sr_wrap_add(span->step.s, span->step.s),
-                         sr_wrap_add(span->step.t, span->step.t),
-                         sr_wrap_add(span->step.w, span->step.w) }
+                         sr_wrap_add(walk.s, walk.s),
+                         sr_wrap_add(walk.t, walk.t),
+                         sr_wrap_add(walk.w, walk.w) }
             /* The LOD unit steps to the next scanline with the low 15 bits of
              * the y derivatives cleared, as the x steps lose their low 5. */
             : (sr_attr){ 0, 0, 0, 0, 0,
                          sr_scaled_derivative(decoded->texture.dsdy & ~0x7fff),
                          sr_scaled_derivative(decoded->texture.dtdy & ~0x7fff),
                          sr_scaled_derivative(decoded->texture.dwdy & ~0x7fff) };
+        span->lod_centre = (sr_attr){ 0, 0, 0, 0, 0,
+            (int32_t)(0u - (uint32_t)walk.s),
+            (int32_t)(0u - (uint32_t)walk.t),
+            (int32_t)(0u - (uint32_t)walk.w) };
+        /* Partial spans (any invalid subline) keep the pipelined pair. */
+        bool all_sublines = span->one_cycle;
+        for (uint32_t row = 0; row < 4u; row++)
+            all_sublines = all_sublines &&
+                work->coverage.left[row] != RASTER_COVERAGE_NEVER_LEFT;
+        span->lod_end_x = !all_sublines ? INT32_MIN
+                        : back ? work->x_begin + 1 : work->x_end - 1;
         span->shade_dy[0] = sr_scaled_derivative(decoded->shade.drdy);
         span->shade_dy[1] = sr_scaled_derivative(decoded->shade.dgdy);
         span->shade_dy[2] = sr_scaled_derivative(decoded->shade.dbdy);
