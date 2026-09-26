@@ -8,17 +8,68 @@
 
 #include <errno.h>
 #include <pthread.h>
-#include <semaphore.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
+/* macOS has <semaphore.h>, but unnamed POSIX semaphores are not implemented
+ * there: sem_init always fails with ENOSYS. Building the pool on it would make
+ * every worker creation fail and silently drop the emulator to a single
+ * thread. GCD semaphores have the same auto-reset counting behaviour and are
+ * the supported replacement. */
+#if defined(__APPLE__)
+#include <dispatch/dispatch.h>
+#include <sys/sysctl.h>
+
+typedef dispatch_semaphore_t sr_sem_t;
+
+static int sr_sem_init(sr_sem_t *s)
+{
+    *s = dispatch_semaphore_create(0);
+    return *s != NULL ? 0 : -1;
+}
+static void sr_sem_destroy(sr_sem_t *s)
+{
+    if (*s) dispatch_release(*s);
+    *s = NULL;
+}
+static void sr_sem_post(sr_sem_t *s) { dispatch_semaphore_signal(*s); }
+/* dispatch_semaphore_wait does not return early on signal delivery, so this is
+ * already the uninterruptible wait the sem_t path has to emulate. */
+static void sr_sem_wait(sr_sem_t *s)
+{
+    dispatch_semaphore_wait(*s, DISPATCH_TIME_FOREVER);
+}
+#else
+#include <semaphore.h>
+
+typedef sem_t sr_sem_t;
+
+static int sr_sem_init(sr_sem_t *s) { return sem_init(s, 0, 0); }
+static void sr_sem_destroy(sr_sem_t *s) { sem_destroy(s); }
+static void sr_sem_post(sr_sem_t *s) { sem_post(s); }
+
+/* sem_wait is the one call here that can return early: a signal delivered to
+ * this thread aborts the wait with EINTR, and treating that as a wake-up would
+ * run the dispatch function without a dispatch. Emulators install signal
+ * handlers, so this is not theoretical. */
+static void sr_sem_wait(sr_sem_t *s)
+{
+    while (sem_wait(s) != 0) {
+        /* errno == EINTR is the only documented spurious failure for an
+         * initialised semaphore; retrying on anything else would spin, so
+         * only that case loops. */
+        if (errno != EINTR) return;
+    }
+}
+#endif
+
 typedef struct sr_worker {
     pthread_t thread;
-    sem_t start;    /* posted to release the worker */
-    sem_t done;     /* posted when the worker finishes */
+    sr_sem_t start; /* posted to release the worker */
+    sr_sem_t done;  /* posted when the worker finishes */
     uint32_t id;
     bool live;
 } sr_worker;
@@ -31,33 +82,19 @@ static struct {
     void *ctx;
 } g_pool;
 
-/* sem_wait is the one call here that can return early: a signal delivered to
- * this thread aborts the wait with EINTR, and treating that as a wake-up would
- * run the dispatch function without a dispatch. Emulators install signal
- * handlers, so this is not theoretical. */
-static void sem_wait_uninterruptible(sem_t *sem)
-{
-    while (sem_wait(sem) != 0) {
-        /* errno == EINTR is the only documented spurious failure for an
-         * initialised semaphore; retrying on anything else would spin, so
-         * only that case loops. */
-        if (errno != EINTR) return;
-    }
-}
-
 static void *worker_main(void *param)
 {
     sr_worker *w = (sr_worker *)param;
     for (;;) {
-        sem_wait_uninterruptible(&w->start);
+        sr_sem_wait(&w->start);
         if (g_pool.shutting_down) {
-            sem_post(&w->done);
+            sr_sem_post(&w->done);
             return NULL;
         }
         /* g_pool.fn/ctx were published before start was posted; the semaphore
          * wait is an acquire barrier, so they are visible here. */
         g_pool.fn(g_pool.ctx, w->id, g_pool.count);
-        sem_post(&w->done);
+        sr_sem_post(&w->done);
     }
 }
 
@@ -71,18 +108,18 @@ void sr_threads_init(uint32_t worker_count)
     for (uint32_t i = 1u; i < worker_count; i++) {
         sr_worker *w = &g_pool.workers[i];
         w->id = i;
-        if (sem_init(&w->start, 0, 0) != 0) {
+        if (sr_sem_init(&w->start) != 0) {
             worker_count = i;  /* fall back to what we successfully built */
             break;
         }
-        if (sem_init(&w->done, 0, 0) != 0) {
-            sem_destroy(&w->start);
+        if (sr_sem_init(&w->done) != 0) {
+            sr_sem_destroy(&w->start);
             worker_count = i;
             break;
         }
         if (pthread_create(&w->thread, NULL, worker_main, w) != 0) {
-            sem_destroy(&w->start);
-            sem_destroy(&w->done);
+            sr_sem_destroy(&w->start);
+            sr_sem_destroy(&w->done);
             worker_count = i;
             break;
         }
@@ -96,6 +133,7 @@ uint32_t sr_threads_count(void)
     return g_pool.count == 0u ? 1u : g_pool.count;
 }
 
+#if !defined(__APPLE__)
 /* Read a single integer out of a one-line sysfs file. */
 static bool read_sysfs_int(const char *path, int *out)
 {
@@ -105,9 +143,26 @@ static bool read_sysfs_int(const char *path, int *out)
     fclose(f);
     return ok;
 }
+#endif
 
 uint32_t sr_threads_physical_cores(void)
 {
+#if defined(__APPLE__)
+    /* Darwin has no /sys, so the topology scan below would find nothing and
+     * report one core. sysctl answers directly: hw.perflevel0.physicalcpu is
+     * the performance-core count on Apple silicon (perflevel1 is the
+     * efficiency cluster, which is not worth scheduling raster work onto),
+     * and hw.physicalcpu covers Intel Macs and older kernels. */
+    int cores = 0;
+    size_t len = sizeof(cores);
+    if (sysctlbyname("hw.perflevel0.physicalcpu", &cores, &len, NULL, 0) != 0 ||
+        cores < 1) {
+        len = sizeof(cores);
+        if (sysctlbyname("hw.physicalcpu", &cores, &len, NULL, 0) != 0)
+            cores = 0;
+    }
+    return cores > 0 ? (uint32_t)cores : 1u;
+#else
     /* sysconf(_SC_NPROCESSORS_ONLN) reports logical CPUs, which would
      * oversubscribe the pool by the SMT factor on most machines. The topology
      * directory is the only place the kernel exposes the physical grouping:
@@ -157,6 +212,7 @@ uint32_t sr_threads_physical_cores(void)
     /* No sysfs (a container with /sys masked, or a kernel without topology
      * support) degrades to single-threaded rather than to a logical count. */
     return seen_count == 0u ? 1u : seen_count;
+#endif
 }
 
 void sr_threads_shutdown(void)
@@ -172,7 +228,7 @@ void sr_threads_shutdown(void)
      * and returns instead of dispatching. */
     g_pool.shutting_down = 1;
     for (uint32_t i = 1u; i < count; i++) {
-        if (g_pool.workers[i].live) sem_post(&g_pool.workers[i].start);
+        if (g_pool.workers[i].live) sr_sem_post(&g_pool.workers[i].start);
     }
 
     for (uint32_t i = 1u; i < count; i++) {
@@ -184,8 +240,8 @@ void sr_threads_shutdown(void)
          * unmapping this code - before that point is what has to be ruled
          * out. */
         pthread_join(w->thread, NULL);
-        sem_destroy(&w->start);
-        sem_destroy(&w->done);
+        sr_sem_destroy(&w->start);
+        sr_sem_destroy(&w->done);
         w->live = false;
     }
 
@@ -209,10 +265,10 @@ void sr_threads_run(void (*fn)(void *ctx, uint32_t id, uint32_t count),
 
     /* Release helpers, run our own share, then wait for helpers to finish. */
     for (uint32_t i = 1u; i < count; i++)
-        sem_post(&g_pool.workers[i].start);
+        sr_sem_post(&g_pool.workers[i].start);
 
     fn(ctx, 0u, count);
 
     for (uint32_t i = 1u; i < count; i++)
-        sem_wait_uninterruptible(&g_pool.workers[i].done);
+        sr_sem_wait(&g_pool.workers[i].done);
 }
