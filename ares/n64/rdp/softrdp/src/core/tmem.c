@@ -63,6 +63,15 @@ static inline uint64_t load_read_u64(const sr_memory *memory, uint32_t addr)
     return value;
 }
 
+/* The eight bytes from a byte address, wrapping inside its aligned RDRAM
+ * dword: the dword rotated left by the address's byte offset. */
+static inline uint64_t load_read_u64_wrapped(const sr_memory *memory, uint32_t addr)
+{
+    const uint64_t dword = load_read_u64(memory, addr & ~7u);
+    const uint32_t rotate = (addr & 7u) * 8u;
+    return rotate ? (dword << rotate) | (dword >> (64u - rotate)) : dword;
+}
+
 /*
  * Every load runs through the load pipeline one 64-bit step at a time. A
  * line's steps start at its first texel's byte, and each lands where the
@@ -84,13 +93,15 @@ static sr_result load_lines(tmem_state *tmem, const sr_memory *memory,
     const uint32_t first_line = block ? cmd->decoded.load.tl & 0x3ffu
                                       : cmd->decoded.load.tl >> 2u;
     const uint32_t last_line = block ? first_line : cmd->decoded.load.th >> 2u;
-    /* A 4bpp source and a multi-line TLUT crash the RDP; nothing is loaded. */
-    if (size == RDP_SIZE_4BPP || (tlut && last_line > first_line)) return SR_OK;
     if (!memory->rdram) return SR_ERROR_INVALID_ARGUMENT;
 
+    /* A 4bpp source takes four texels a step but moves the source on by one
+     * byte, and every step reads the dword it starts in rotated to that byte.
+     * A multi-line TLUT loads each line over the same rows. */
+    const bool nibble_source = size == RDP_SIZE_4BPP;
     const bool entry_steps = tlut && size == RDP_SIZE_16BPP;
-    const uint32_t step_bytes = entry_steps ? 2u : 8u;
-    const uint32_t step_texels = entry_steps ? 1u : 16u >> size;
+    const uint32_t step_bytes = entry_steps ? 2u : nibble_source ? 1u : 8u;
+    const uint32_t step_texels = entry_steps ? 1u : nibble_source ? 4u : 16u >> size;
     const int32_t step_s = (block ? 0x80 : 0x200) >> size;
     /* DxT is 1.11 lines per step; T holds it in 1/256ths of a 10.5 unit. */
     const int32_t step_t = block ? (int32_t)cmd->decoded.load.dxt : 0;
@@ -138,6 +149,7 @@ static sr_result load_lines(tmem_state *tmem, const sr_memory *memory,
                 const uint64_t data = tlut
                     ? (((uint64_t)load_read_u8(memory, source) << 8) |
                        load_read_u8(memory, source + 1u)) * 0x0001000100010001ull
+                    : nibble_source ? load_read_u64_wrapped(memory, source)
                     : load_read_u64(memory, source);
                 tmem->qwords[word] = (t & 1u) ? data : (data << 32 | data >> 32);
                 upper_written |= word >= 0x100u;
@@ -175,6 +187,10 @@ static sr_result load_lines(tmem_state *tmem, const sr_memory *memory,
                     ((uint64_t)load_read_u8(memory, source) << 8) |
                     load_read_u8(memory, source + 1u);
                 data = entry * 0x0001000100010001ull;
+            } else if (tlut || nibble_source) {
+                /* An odd TLUT source reads its four entries from the dword
+                 * it starts in, wrapping past the dword's last byte. */
+                data = load_read_u64_wrapped(memory, source);
             } else {
                 data = load_read_u64(memory, source);
             }

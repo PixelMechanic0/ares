@@ -1110,8 +1110,9 @@ static sr_result kernel_rectangle(sr_memory *memory,
 
 static inline uint32_t copy_group_pixels(const rdp_primitive_state *primitive)
 {
-    return primitive->framebuffer.color_image.size <= RDP_SIZE_8BPP ? 8u
-        : primitive->framebuffer.color_image.size == RDP_SIZE_16BPP ? 4u : 2u;
+    /* An 8bpp target takes four pixels a clock, like a 16bpp one. */
+    return primitive->framebuffer.color_image.size == RDP_SIZE_4BPP ? 8u
+        : primitive->framebuffer.color_image.size <= RDP_SIZE_16BPP ? 4u : 2u;
 }
 
 typedef struct rdp_copy_group {
@@ -1238,25 +1239,16 @@ static void copy_fetch_group(const rdp_primitive_state *primitive,
         return;
     }
 
-    const uint32_t word_count = byte_target
-        ? ((uint32_t)group->count + 1u) >> 1 : group->count;
-    for (uint32_t member = 0; member < word_count; member++) {
+    for (uint32_t member = 0; member < group->count; member++) {
         uint16_t raw_word;
         if (!tmem_fetch_copy_word_fixed5(primitive->tmem,
                 &primitive->texture, s_fixed, t_fixed, member, &raw_word))
             continue;
-        if (byte_target) {
-            const uint32_t first_lane = member << 1;
-            group->value[first_lane] = (uint16_t)(raw_word >> 8);
-            group->valid_mask |= (uint8_t)(1u << first_lane);
-            if (first_lane + 1u < group->count) {
-                group->value[first_lane + 1u] = (uint16_t)(raw_word & 0xffu);
-                group->valid_mask |= (uint8_t)(1u << (first_lane + 1u));
-            }
-        } else {
-            group->value[member] = raw_word;
-            group->valid_mask |= (uint8_t)(1u << member);
-        }
+        /* An 8bpp pixel is the high byte of its copy word: the first two
+         * words hold the replicated texels at S and S+2, the last two the raw
+         * TMEM halfwords holding texels S+2 and S+3. */
+        group->value[member] = byte_target ? (uint16_t)(raw_word >> 8) : raw_word;
+        group->valid_mask |= (uint8_t)(1u << member);
     }
 }
 
