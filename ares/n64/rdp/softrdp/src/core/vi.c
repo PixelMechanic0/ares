@@ -218,7 +218,7 @@ void vi_build_scanout_plan(const vi_state *vi, const sr_memory *memory,
     const int32_t window_x_begin = h_start;
     const int32_t window_width = h_end - h_start;
     const bool serrate = (vi->control & VI_CONTROL_SERRATE) != 0;
-    const bool wrapped_v_window = serrate && v_end < v_start;
+    const bool wrapped_v_window = v_end < v_start;
     const int32_t canvas_height = pal ? 288 : 240;
     int32_t field_height = (v_end - v_start_raw) / 2;
     /* A wrapped V_VIDEO window continues to the bottom of the active video
