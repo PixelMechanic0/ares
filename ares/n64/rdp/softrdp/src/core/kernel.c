@@ -665,11 +665,11 @@ static SR_ALWAYS_INLINE sr_result render_segment(sr_memory *memory,
             stage_combiner_set_scalar(regs, RDP_COMBINER_LOD_FRACTION, texture.lod_fraction);
         if (span->reads_any & (1u << RDP_COMBINER_NOISE))
             stage_combiner_set_scalar(regs, RDP_COMBINER_NOISE, stage_combiner_noise(noise));
+        /* Hardware retains COMBINED across pixels. Zero approximates the
+         * unmodelled incoming register value. */
         stage_combined combined = { 0, 0, 0, 0 };
         uint16_t cycle0_alpha = 0u;
         if (color->two_cycle) {
-            /* The combined rows stay zero in one-cycle mode, where nothing
-             * writes them; here they carry the previous pixel's result. */
             if (reads_first & STAGE_COMBINER_PAIR(RDP_COMBINER_COMBINED_RGB))
                 stage_combiner_set_combined(regs, combined);
             combined = stage_combine_cycle_regs(&span->ops[0], regs);
@@ -718,7 +718,9 @@ static SR_ALWAYS_INLINE sr_result render_segment(sr_memory *memory,
          * Such spans run against their walking order (render_span_next), so
          * that cycle 0 is normally the one the previous pixel ran for itself. */
         uint8_t compare_coverage = coverage.count;
-        if (next && span->alpha.two_cycle_compare) {
+        if (primitive->plan.stages & RDP_DRAW_ALPHA_CURRENT) {
+            cycle0_alpha = pixel.a;
+        } else if (next && span->alpha.two_cycle_compare) {
             const bool forward = rectangle || primitive->triangle.position.flip;
             const int nx = forward ? x + 1 : x - 1;
             const uint16_t own_cycle0 = cycle0_alpha;

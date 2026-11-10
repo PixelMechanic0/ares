@@ -31,7 +31,8 @@ typedef enum rdp_draw_stage {
      * before the texture and combiner stages run; this flag marks the draws where
      * that would change the result.
      */
-    RDP_DRAW_DEPTH_LATE    = 1u << 5
+    RDP_DRAW_DEPTH_LATE    = 1u << 5,
+    RDP_DRAW_ALPHA_CURRENT = 1u << 6
 } rdp_draw_stage;
 
 typedef enum rdp_texture_unit {

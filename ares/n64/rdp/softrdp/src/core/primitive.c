@@ -414,6 +414,19 @@ static void primitive_compile_plan(rdp_primitive_state *primitive,
         plan->stages |= RDP_DRAW_LOD;
     if (primitive->fragment.blend.alpha_compare)
         plan->stages |= RDP_DRAW_ALPHA_COMPARE;
+    const rdp_combiner_cycle *c0 = &primitive->color.program.cycle[0];
+    const rdp_combiner_cycle *c1 = &primitive->color.program.cycle[1];
+    /* C0(next).a = C1(current).a when C0 passes COMBINED through and C1
+     * alpha is independent of it. Resolve that cancellation locally. */
+    if (primitive->fragment.blend.alpha_compare && primitive->color.two_cycle &&
+        !primitive->fragment.alpha_cvg_select &&
+        c0->alpha_d == RDP_COMBINER_COMBINED_ALPHA &&
+        (c0->alpha_c == RDP_COMBINER_ZERO || c0->alpha_a == c0->alpha_b) &&
+        c1->alpha_a != RDP_COMBINER_COMBINED_ALPHA &&
+        c1->alpha_b != RDP_COMBINER_COMBINED_ALPHA &&
+        c1->alpha_c != RDP_COMBINER_COMBINED_ALPHA &&
+        c1->alpha_d != RDP_COMBINER_COMBINED_ALPHA)
+        plan->stages |= RDP_DRAW_ALPHA_CURRENT;
     if (primitive->fill_mode)
         plan->stages |= RDP_DRAW_FILL;
 }
